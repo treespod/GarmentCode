@@ -330,38 +330,18 @@ class Panel:
             * f (list): Triangle faces of the panel
         """
         points = self.panel_vertices
-        len_points = len(points)
         edge_verts_ids = tri_utils.get_edge_vert_ids(self.edges)
-
-
-        cdt_mesh = tri_utils.Mesh_2_Constrained_Delaunay_triangulation_2()
-        cdt_points_mesh = tri_utils.create_cdt_points(cdt_mesh,points)
-        tri_utils.cdt_insert_constraints(cdt_mesh,cdt_points_mesh,edge_verts_ids)
-
-        #Meshing the triangulation with default shape criterion; i.e. sqrt(1/(4 * 0.125)) = sqrt(2)
-        tri_utils.CGAL_Mesh_2.refine_Delaunay_mesh_2(cdt_mesh,
-                                           tri_utils.Delaunay_mesh_size_criteria_2(0.125, 1.43 * mesh_resolution)) #1.475
-
-        if plot:
-            # Mark faces that are inside the domain
-            face_info = tri_utils.mark_domain(cdt_mesh)
-            tri_utils.plot_triangulation(cdt_mesh, face_info)
-
-        keep_pts_f = tri_utils.get_keep_vertices(cdt_mesh, len_points)
-
-        # Triangulate mesh without newly inserted boundary points
-        cdt = tri_utils.Constrained_Delaunay_triangulation_2()
-        cdt_points = tri_utils.create_cdt_points(cdt, keep_pts_f)
-        new_points = tri_utils.cdt_insert_constraints(cdt, cdt_points, edge_verts_ids)
-
-        # Faces without accidentially inserted points -- again!
-        # NOTE: point insertion might be a sign of degenerate triangles. 
-        # But instead a separate check was added
-        f = list(tri_utils.get_face_v_ids(cdt, keep_pts_f, new_points, check=check, plot=plot))
+        keep_pts_f, f = tri_utils.triangulate_panel(
+            points,
+            edge_verts_ids,
+            max_edge_length=1.43 * mesh_resolution,
+            plot=plot,
+            check=check,
+        )
 
         #Store
-        self.panel_vertices = keep_pts_f
-        self.panel_faces = f
+        self.panel_vertices = list(keep_pts_f)
+        self.panel_faces = list(f)
 
     def is_manifold(self, tol=1e-2):
         return tri_utils.is_manifold(
@@ -748,7 +728,7 @@ class BoxMesh(wrappers.VisPattern):
         For each Panel:
             * For each edge generate its edge vertices and store them in panel.panel_vertices.
               Further, store "start", "inside-edge", and "end" indices for each edge vertex in edge.vertex_range
-            * Generate vertices inside the panel and its triangles using CGAL and store them in panel.panel_vertices
+            * Generate panel interior vertices and triangles using Triangle and store them in panel.panel_vertices
               and panel.panel_triangles, respectively.
         Input:
         * self (BoxMesh object): Instance of BoxMesh class from which the function is called

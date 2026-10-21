@@ -50,7 +50,7 @@ These dependencies are installed through [setup.cfg](https://github.com/maria-ko
 * [trimesh](https://trimesh.org/)
 * [libigl](https://libigl.github.io/libigl-python-bindings/)
 * [pyrender](https://pyrender.readthedocs.io/en/latest/index.html)
-* [CGAL](https://pypi.org/project/cgal/)
+* [Triangle](https://pypi.org/project/triangle/)
 
 All python dependencies can be installed with `pip install` / `conda install`:
 
