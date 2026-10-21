@@ -270,9 +270,12 @@ class SimConfig:
         self.update_min_steps()
 
     def update_min_steps(self):
-        self.min_sim_steps = 0
+        self.min_sim_steps = self.get_sim_props_value(self.props, 'min_sim_steps', 0)
         if self.enable_body_smoothing: 
-            self.min_sim_steps = self.smoothing_recover_start_frame + self.smoothing_num_steps
+            self.min_sim_steps = max(
+                self.min_sim_steps,
+                self.smoothing_recover_start_frame + self.smoothing_num_steps,
+            )
         if self.enable_attachment_constraint:
             # NOTE: Adding a small number of frames 
             # to allow clothing movement to restart after attachment is released

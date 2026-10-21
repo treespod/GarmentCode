@@ -14,11 +14,13 @@ Create system.json file in the root of this directory with your machine's file p
     * path to folder containing datasets of body shape samples (`'body_samples_path'`)
     
 
-## Installing simulator
+## Simulation backend
 
-We use our own version of the [NVIDIA warp](https://github.com/maria-korosteleva/NvidiaWarp-GarmentCode) simulator. It should be installed manually to use our library correctly.
+Garment simulation uses the wgpu-py XPBD backend. Install `wgpu` through the project dependencies and ensure the machine has a WebGPU adapter (Vulkan on Linux, Metal on macOS, or D3D12 on Windows). The current port reports unsupported simulation features unless `allow_unsupported_wgpu` is explicitly enabled in the simulation config. USD frame caching and vertex-normal export are not implemented by this backend.
 
-See the instructions in the [NvidiaWarp-GarmentCode](https://github.com/maria-korosteleva/NvidiaWarp-GarmentCode) repo. 
+Run the one-frame core verification with `python test_garment_sim.py --sim_config assets/Sim_props/wgpu_core_verify.yaml`. This config disables rendering and features not yet implemented by the WGPU port.
+
+On a machine with a WebGPU adapter, run the device-backed integration test with `GARMENTCODE_RUN_WGPU_TESTS=1 python -m unittest test_wgpu_port.WgpuPortTests.test_real_wgpu_mesh_simulation -v` (use your shell's syntax to set the environment variable).
 
 ## Using pip
 
@@ -51,6 +53,8 @@ These dependencies are installed through [setup.cfg](https://github.com/maria-ko
 * [libigl](https://libigl.github.io/libigl-python-bindings/)
 * [pyrender](https://pyrender.readthedocs.io/en/latest/index.html)
 * [Triangle](https://pypi.org/project/triangle/)
+* [wgpu-py](https://pypi.org/project/wgpu/)
+* [rtree](https://pypi.org/project/rtree/)
 
 All python dependencies can be installed with `pip install` / `conda install`:
 
@@ -58,7 +62,6 @@ All python dependencies can be installed with `pip install` / `conda install`:
 conda create -n garmentcode python=3.9
 conda activate garmentcode
 pip install -e . # installs in editable mode, installs requirements from setup.cfg
-<build and install warp for GarmentCode>
 ```
 
 Add the root repository to `PYTHONPATH`.

@@ -297,18 +297,6 @@ class Properties():
         self.properties['system_info']['processor'] = platform.processor()
         self.properties['system_info']['ram'] = str(round(psutil.virtual_memory().total / (1024.0 ** 3))) + " GB"
 
-        try: 
-            import warp   # Optional section
-            if warp.context.runtime is None:
-                # runtime = warp.context.Runtime()
-                warp.init()
-            else:
-                print(f'{self.__class__.__name__}::INFO::Saving GPU info -- warp already initialized')
-            curr_device = warp.get_device()   
-            self.properties['system_info']['GPU'] = curr_device.name if curr_device.is_cuda else 'Not used'
-        except ImportError:
-            pass  # Don't do anything if warp not available
-
     def stats_summary(self):
         """
             Compute data simulation processing statistics

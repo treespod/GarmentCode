@@ -1,7 +1,7 @@
 
 # GarmentCodeData: Running data generation and simulation
 
-GarmentCode now supports a synthetic data generation pipeline of [GarmentCodeData](https://igl.ethz.ch/projects/GarmentCodeData/) using [our fork of NVIDIA Warp simulator](https://github.com/maria-korosteleva/NvidiaWarp-GarmentCode). For the technical details of the generation process, please, check the paper.
+GarmentCode supports the GarmentCodeData synthetic data-generation pipeline using the wgpu-py XPBD cloth backend. The current port supports particle prediction, springs, bending, body contacts, and single-frame self contacts. Unsupported contact filters and multi-frame self-contact regeneration are rejected unless `allow_unsupported_wgpu` is explicitly enabled; enabled runs are approximate rather than full parity.
 
 The default setup creates sewing pattern samples based on the [garment programs](../assets/garment_programs/) provided in this repo with sampling probabilities specified in [assets/design_params/default.yaml](../assets/design_params/default.yaml). 
 

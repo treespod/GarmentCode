@@ -28,7 +28,7 @@ Official Implementation of [GarmentCode: Programming Parametric Sewing Patterns]
 
 1. [Installation](https://github.com/maria-korosteleva/GarmentCode/blob/main/docs/Installation.md)
 2. [Running Configurator](https://github.com/maria-korosteleva/GarmentCode/blob/main/docs/Running_garmentcode.md) 
-3. [Running Data Generation (warp)](https://github.com/maria-korosteleva/GarmentCode/blob/main/docs/Running_data_generation.md) 
+3. [Running Data Generation (wgpu-py)](https://github.com/maria-korosteleva/GarmentCode/blob/main/docs/Running_data_generation.md)
 3. [Body measurements](https://github.com/maria-korosteleva/GarmentCode/blob/main/docs/Body%20Measurements%20GarmentCode.pdf)
 4. [Dataset documentation](https://www.research-collection.ethz.ch/handle/20.500.11850/673889)
 3. [Running Old Maya+Qualoth tools](https://github.com/maria-korosteleva/GarmentCode/blob/main/docs/Running_Maya_Qualoth.md) 
