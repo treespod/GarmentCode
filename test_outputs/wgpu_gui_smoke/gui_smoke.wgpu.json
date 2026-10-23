@@ -1,0 +1,23 @@
+{
+  "backend": "wgpu-py",
+  "adapter": "llvmpipe (LLVM 20.1.2, 256 bits)",
+  "adapter_backend": "Vulkan",
+  "particles": 5758,
+  "triangles": 11248,
+  "springs": 17008,
+  "bending_constraints": 16736,
+  "attachment_constraints": 4,
+  "body_contacts_at_initial_state": 5,
+  "body_collision_filtered_particles": 5758,
+  "cloth_reference_drag_enabled": true,
+  "point_triangle_contacts_at_initial_state": 0,
+  "edge_edge_contacts_at_initial_state": 0,
+  "self_intersecting_particles_at_initial_state": 193,
+  "frames": 2,
+  "substeps_per_frame": 1,
+  "elapsed_seconds": 22.97935662000009,
+  "y_shift": 0.0,
+  "omitted_features": [],
+  "input_obj": "/workspaces/GarmentCode/test_outputs/shirt_mean_boxmesh.obj",
+  "output_obj": "/workspaces/GarmentCode/test_outputs/wgpu_gui_smoke/gui_smoke.obj"
+}

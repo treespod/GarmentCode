@@ -1,7 +1,9 @@
 
 # GarmentCodeData: Running data generation and simulation
 
-GarmentCode supports the GarmentCodeData synthetic data-generation pipeline using the wgpu-py XPBD cloth backend. The current port supports particle prediction, springs, bending, body contacts, and single-frame self contacts. Unsupported contact filters and multi-frame self-contact regeneration are rejected unless `allow_unsupported_wgpu` is explicitly enabled; enabled runs are approximate rather than full parity.
+GarmentCode supports the GarmentCodeData synthetic data-generation pipeline using the wgpu-py XPBD cloth backend. The backend supports particle prediction, springs, bending, body contacts, point-triangle and edge-edge self contacts regenerated per frame, semantic body collision filters, labeled attachment constraints, and panel/body reference drag. Self-contact broad-phase queries and body proximity queries run on the CPU; constraint resolution runs in WGSL.
+
+Particle-particle collisions and ground contacts are not implemented. Other requested features that lack required segmentation or measurement inputs are reported as omitted. `allow_unsupported_wgpu` permits those omissions and produces an approximate run; it does not enable an unsupported feature or imply full parity with the previous simulator.
 
 The default setup creates sewing pattern samples based on the [garment programs](../assets/garment_programs/) provided in this repo with sampling probabilities specified in [assets/design_params/default.yaml](../assets/design_params/default.yaml). 
 
@@ -119,7 +121,6 @@ On the high level, every config contains the following
     * Camera location for the front view
 
 > Simulation parameters differ significantly for Warp-based and Qualoth-based piplines, and they cannot be used interchengeably.
-
 
 
 

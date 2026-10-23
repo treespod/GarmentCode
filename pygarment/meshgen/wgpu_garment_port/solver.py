@@ -9,7 +9,6 @@ separate module; this file intentionally contains no Warp dependency.
 
 from __future__ import annotations
 
-import math
 import struct
 import sys
 import time
@@ -44,12 +43,12 @@ struct SimParams {
     _pad_f0: f32,
     body_enabled: u32,
     body_drag_enabled: u32,
+    attachment_frame: u32,
+    attachment_frames: u32,
     particle_radius: f32,
     body_mu: f32,
     contact_relaxation: f32,
     _pad_f1: f32,
-    _pad_f2: f32,
-    _pad_f3: f32,
 };
 
 @group(0) @binding(0) var<uniform> params: SimParams;
@@ -69,6 +68,8 @@ struct SimParams {
 @group(0) @binding(14) var<storage, read> point_tri_sidedness: array<u32>;
 @group(0) @binding(15) var<storage, read> edge_edge_indices: array<vec4<u32>>;
 @group(0) @binding(16) var<storage, read> edge_edge_normals: array<vec4<f32>>;
+@group(0) @binding(17) var<storage, read> attachment_data: array<vec4<f32>>;
+@group(0) @binding(18) var<storage, read> attachment_offsets: array<u32>;
 
 fn closest_triangle_barycentric(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
     let ab = b - a;
@@ -397,6 +398,30 @@ fn gather_and_apply(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var delta = vec3<f32>(0.0);
 
+    if (params.attachment_frame < params.attachment_frames) {
+        var attachment_id = attachment_offsets[i];
+        let attachment_end = attachment_offsets[i + 1u];
+        let inv_mass = inverse_masses[i];
+        loop {
+            if (attachment_id >= attachment_end) { break; }
+            let base = 3u * attachment_id;
+            let anchor = attachment_data[base].xyz;
+            let normal = attachment_data[base + 1u].xyz;
+            let stiffness = attachment_data[base + 2u].x;
+            let damping = attachment_data[base + 2u].y;
+            if (inv_mass > 0.0 && stiffness > 0.0) {
+                let constraint = dot(normal, positions[i].xyz + delta - anchor);
+                let alpha = 1.0 / (stiffness * params.dt * params.dt);
+                let gamma = damping / (stiffness * params.dt);
+                let grad_dot_v = params.dt * dot(normal, velocities[i].xyz);
+                let dlambda = -(constraint + gamma * grad_dot_v) /
+                              ((1.0 + gamma) * inv_mass + alpha);
+                delta = delta + inv_mass * dlambda * normal;
+            }
+            attachment_id = attachment_id + 1u;
+        }
+    }
+
     // Static triangle-mesh/body contact anchors are prepared by trimesh on the
     // CPU at the start of the frame. Contact resolution itself stays in WGSL.
     if (params.body_enabled != 0u) {
@@ -482,6 +507,8 @@ class WgpuXPBDSolver:
         damping_min_speed: float = 0.0,
         max_velocity: float = 25.0,
         body_contact_data: np.ndarray | None = None,
+        attachment_data: np.ndarray | None = None,
+        attachment_offsets: np.ndarray | None = None,
         point_tri_indices: np.ndarray | None = None,
         point_tri_sidedness: np.ndarray | None = None,
         edge_edge_indices: np.ndarray | None = None,
@@ -519,6 +546,8 @@ class WgpuXPBDSolver:
         self.body_mu = float(body_mu)
         self.contact_relaxation = float(contact_relaxation)
         self.body_drag_enabled = bool(body_drag_enabled)
+        self.attachment_frames = 0
+        self.frame_index = 0
         if body_contact_data is None:
             self.body_contact_data = None
             self.body_enabled = False
@@ -528,6 +557,20 @@ class WgpuXPBDSolver:
                 raise ValueError("body_contact_data must have one 3xvec4 record per particle")
             self.body_contact_data = body_contact_data.copy()
             self.body_enabled = True
+        if attachment_data is None:
+            self.attachment_data = np.empty((0, 3, 4), dtype=np.float32)
+        else:
+            attachment_data = np.asarray(attachment_data, dtype=np.float32).reshape(-1, 3, 4)
+            self.attachment_data = attachment_data.copy()
+        if attachment_offsets is None:
+            self.attachment_offsets = np.zeros(n + 1, dtype=np.uint32)
+        else:
+            attachment_offsets = np.asarray(attachment_offsets, dtype=np.uint32).reshape(-1)
+            if len(attachment_offsets) != n + 1:
+                raise ValueError("attachment_offsets must have one entry per particle plus one")
+            if int(attachment_offsets[-1]) != len(self.attachment_data):
+                raise ValueError("attachment_offsets do not cover the attachment records")
+            self.attachment_offsets = attachment_offsets.copy()
         self.point_tri_indices = np.asarray(
             np.empty((0, 4), dtype=np.uint32) if point_tri_indices is None else point_tri_indices,
             dtype=np.uint32,
@@ -555,6 +598,7 @@ class WgpuXPBDSolver:
         self.nee = len(self.edge_edge_indices)
 
         self._build_incidence()
+        self._buffer_capacities: dict[str, int] = {}
         self.adapter = adapter or self._choose_adapter()
         self.device = self.adapter.request_device_sync(
             label="GarmentCode WGPU XPBD",
@@ -632,7 +676,123 @@ class WgpuXPBDSolver:
         )
         if raw:
             self.queue.write_buffer(buffer, 0, raw)
+        self._buffer_capacities[label] = size
         return buffer
+
+    def _upload_storage_buffer(
+        self, attribute: str, data: np.ndarray, label: str
+    ) -> bool:
+        data = np.ascontiguousarray(data)
+        raw = data.tobytes()
+        buffer = getattr(self, attribute)
+        required_size = max(len(raw), 4)
+        if required_size > self._buffer_capacities[label]:
+            buffer = self._storage_buffer(data, label)
+            setattr(self, attribute, buffer)
+            return True
+        if raw:
+            self.queue.write_buffer(buffer, 0, raw)
+        return False
+
+    def update_self_contact_data(
+        self,
+        point_tri_indices: np.ndarray,
+        point_tri_sidedness: np.ndarray,
+        edge_edge_indices: np.ndarray,
+        edge_edge_normals: np.ndarray,
+    ) -> None:
+        point_tri_indices = np.asarray(point_tri_indices, dtype=np.uint32).reshape(-1, 4)
+        point_tri_sidedness = np.asarray(point_tri_sidedness, dtype=np.uint32).reshape(-1)
+        edge_edge_indices = np.asarray(edge_edge_indices, dtype=np.uint32).reshape(-1, 4)
+        edge_edge_normals = np.asarray(edge_edge_normals, dtype=np.float32).reshape(-1, 3)
+        if len(point_tri_indices) != len(point_tri_sidedness):
+            raise ValueError("point-triangle indices/sidedness counts differ")
+        if len(edge_edge_indices) != len(edge_edge_normals):
+            raise ValueError("edge-edge indices/normals counts differ")
+        if point_tri_indices.size and int(point_tri_indices.max()) >= self.n:
+            raise ValueError("point-triangle contact index is out of range")
+        if edge_edge_indices.size and int(edge_edge_indices.max()) >= self.n:
+            raise ValueError("edge-edge contact index is out of range")
+
+        self.point_tri_indices = point_tri_indices.copy()
+        self.point_tri_sidedness = point_tri_sidedness.copy()
+        self.edge_edge_indices = edge_edge_indices.copy()
+        self.edge_edge_normals = edge_edge_normals.copy()
+        self.npt = len(self.point_tri_indices)
+        self.nee = len(self.edge_edge_indices)
+        self._build_incidence()
+
+        point_tri_buffer_changed = self._upload_storage_buffer(
+            "point_tri_index_buffer",
+            _as_vec4_indices(self.point_tri_indices, 4),
+            "point-triangle contacts",
+        )
+        sidedness_buffer_changed = self._upload_storage_buffer(
+            "point_tri_sidedness_buffer",
+            self.point_tri_sidedness,
+            "point-triangle sidedness",
+        )
+        edge_index_buffer_changed = self._upload_storage_buffer(
+            "edge_edge_index_buffer",
+            _as_vec4_indices(self.edge_edge_indices, 4),
+            "edge-edge contacts",
+        )
+        edge_normal_buffer_changed = self._upload_storage_buffer(
+            "edge_edge_normal_buffer",
+            self._vec4(self.edge_edge_normals),
+            "edge-edge contact normals",
+        )
+        delta = np.zeros((max(self.constraint_delta_count, 1), 4), dtype=np.float32)
+        delta_buffer_changed = self._upload_storage_buffer(
+            "constraint_delta_buffer", delta, "constraint deltas"
+        )
+        slot_buffer_changed = self._upload_storage_buffer(
+            "incidence_slot_buffer",
+            self.incidence_slots,
+            "incidence slots",
+        )
+        self._upload_storage_buffer(
+            "incidence_offset_buffer",
+            self.incidence_offsets,
+            "incidence offsets",
+        )
+
+        if point_tri_buffer_changed or sidedness_buffer_changed or delta_buffer_changed:
+            self.point_tri_bind_group = self._bind_group(
+                self.point_tri_pipeline,
+                {0: self.params_buffer, 1: self.q_buffer, 4: self.inv_mass_buffer,
+                 9: self.constraint_delta_buffer, 13: self.point_tri_index_buffer,
+                 14: self.point_tri_sidedness_buffer},
+            )
+        if edge_index_buffer_changed or edge_normal_buffer_changed or delta_buffer_changed:
+            self.edge_edge_bind_group = self._bind_group(
+                self.edge_edge_pipeline,
+                {0: self.params_buffer, 1: self.q_buffer, 4: self.inv_mass_buffer,
+                 9: self.constraint_delta_buffer, 15: self.edge_edge_index_buffer,
+                 16: self.edge_edge_normal_buffer},
+            )
+        if delta_buffer_changed:
+            self.spring_bind_group = self._bind_group(
+                self.spring_pipeline,
+                {0: self.params_buffer, 1: self.q_buffer, 2: self.v_buffer,
+                 4: self.inv_mass_buffer, 5: self.spring_index_buffer,
+                 6: self.spring_properties_buffer, 9: self.constraint_delta_buffer},
+            )
+            self.bend_bind_group = self._bind_group(
+                self.bend_pipeline,
+                {0: self.params_buffer, 1: self.q_buffer, 2: self.v_buffer,
+                 4: self.inv_mass_buffer, 7: self.bend_index_buffer,
+                 8: self.bend_properties_buffer, 9: self.constraint_delta_buffer},
+            )
+        if delta_buffer_changed or slot_buffer_changed:
+            self.apply_bind_group = self._bind_group(
+                self.apply_pipeline,
+                {0: self.params_buffer, 1: self.q_buffer, 2: self.v_buffer,
+                 3: self.old_q_buffer, 4: self.inv_mass_buffer,
+                 9: self.constraint_delta_buffer, 10: self.incidence_offset_buffer,
+                 11: self.incidence_slot_buffer, 12: self.body_contact_buffer,
+                 17: self.attachment_buffer, 18: self.attachment_offset_buffer},
+            )
 
     @staticmethod
     def _vec4(values: np.ndarray) -> np.ndarray:
@@ -687,6 +847,17 @@ class WgpuXPBDSolver:
             body_data = np.zeros((self.n, 3, 4), dtype=np.float32)
         self.body_contact_buffer = self._storage_buffer(
             body_data.reshape(-1, 4), "body contact anchors"
+        )
+        attachment_buffer_data = (
+            self.attachment_data.reshape(-1, 4)
+            if len(self.attachment_data)
+            else np.zeros((3, 4), dtype=np.float32)
+        )
+        self.attachment_buffer = self._storage_buffer(
+            attachment_buffer_data, "attachment constraints"
+        )
+        self.attachment_offset_buffer = self._storage_buffer(
+            self.attachment_offsets, "attachment offsets"
         )
 
         # Uniform block: six 16-byte lanes (96 bytes total).
@@ -755,7 +926,8 @@ class WgpuXPBDSolver:
             {0: self.params_buffer, 1: self.q_buffer, 2: self.v_buffer,
              3: self.old_q_buffer, 4: self.inv_mass_buffer,
              9: self.constraint_delta_buffer, 10: self.incidence_offset_buffer,
-             11: self.incidence_slot_buffer, 12: self.body_contact_buffer},
+             11: self.incidence_slot_buffer, 12: self.body_contact_buffer,
+             17: self.attachment_buffer, 18: self.attachment_offset_buffer},
         )
 
     def _bind_group(self, pipeline, resources: dict[int, Any]):
@@ -767,13 +939,14 @@ class WgpuXPBDSolver:
 
     def _update_params(self, dt: float, gravity: tuple[float, float, float]) -> None:
         payload = struct.pack(
-            "<8I8f2I6f",
+            "<8I8f4I4f",
             self.n, self.ns, self.nb, self.npt, self.nee, 0, 0, 0,
             float(dt), float(gravity[0]), float(gravity[1]), float(gravity[2]),
             self.damping, self.damping_min_speed, self.max_velocity, 0.0,
             int(self.body_enabled), int(self.body_drag_enabled),
+            int(self.frame_index), int(self.attachment_frames),
             self.particle_radius, self.body_mu, self.contact_relaxation,
-            0.0, 0.0, 0.0,
+            0.0,
         )
         self.queue.write_buffer(self.params_buffer, 0, payload)
 
@@ -821,14 +994,30 @@ class WgpuXPBDSolver:
         substeps: int = 10,
         gravity: tuple[float, float, float] = (0.0, -9.81, 0.0),
         zero_gravity_steps: int = 0,
+        attachment_frames: int = 0,
         body_contact_updater: Callable[[np.ndarray], np.ndarray] | None = None,
+        self_contact_updater: Callable[
+            [np.ndarray, np.ndarray, int],
+            tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+        ] | None = None,
     ) -> SolverStats:
         t0 = time.perf_counter()
+        self.attachment_frames = max(int(attachment_frames), 0)
         for frame in range(int(frames)):
-            if body_contact_updater is not None and frame > 0:
+            self.frame_index = frame
+            if frame > 0 and (
+                body_contact_updater is not None or self_contact_updater is not None
+            ):
                 current = self._read_positions_from_device()
                 self.positions = current
-                self.update_body_contact_data(body_contact_updater(current))
+                if body_contact_updater is not None:
+                    self.update_body_contact_data(body_contact_updater(current))
+                if self_contact_updater is not None:
+                    velocities = self._read_velocities_from_device()
+                    self.velocities = velocities
+                    self.update_self_contact_data(
+                        *self_contact_updater(current, velocities, frame)
+                    )
             frame_gravity = (0.0, 0.0, 0.0) if frame < zero_gravity_steps else gravity
             self.step_frame(dt=1.0 / float(fps), substeps=substeps, gravity=frame_gravity)
         # queue.read_buffer waits for all submitted work, and gives us a stable
@@ -860,6 +1049,12 @@ class WgpuXPBDSolver:
     def _read_positions_from_device(self) -> np.ndarray:
         return np.frombuffer(
             self.queue.read_buffer(self.q_buffer), dtype=np.float32,
+            count=self.n * 4,
+        ).reshape(self.n, 4)[:, :3].copy()
+
+    def _read_velocities_from_device(self) -> np.ndarray:
+        return np.frombuffer(
+            self.queue.read_buffer(self.v_buffer), dtype=np.float32,
             count=self.n * 4,
         ).reshape(self.n, 4)[:, :3].copy()
 

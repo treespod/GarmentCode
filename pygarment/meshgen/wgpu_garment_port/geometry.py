@@ -22,6 +22,11 @@ class BodyContactQuery:
         body_thickness: float = 0.25,
         margin: float = 0.2,
         enable_reference_drag: bool = False,
+        face_filter_masks: np.ndarray | None = None,
+        particle_filter_ids: np.ndarray | None = None,
+        body_face_labels: list[str] | None = None,
+        particle_reference_labels: list[str] | None = None,
+        reference_drag_pairs: set[tuple[str, str]] | None = None,
     ) -> None:
         import trimesh
 
@@ -35,11 +40,64 @@ class BodyContactQuery:
         self.body_thickness = float(body_thickness)
         self.margin = float(margin)
         self.enable_reference_drag = bool(enable_reference_drag)
+        self.face_filter_masks = (
+            np.empty((0, len(faces)), dtype=bool)
+            if face_filter_masks is None
+            else np.asarray(face_filter_masks, dtype=bool).reshape(-1, len(faces))
+        )
+        self.particle_filter_ids = (
+            None
+            if particle_filter_ids is None
+            else np.asarray(particle_filter_ids, dtype=np.int32).reshape(-1)
+        )
+        self.body_face_labels = body_face_labels
+        self.particle_reference_labels = particle_reference_labels
+        self.reference_drag_pairs = reference_drag_pairs or set()
+        self.filtered_proximity: dict[int, tuple[Any, np.ndarray]] = {}
+        for filter_id, excluded_faces in enumerate(self.face_filter_masks):
+            allowed_face_ids = np.flatnonzero(~excluded_faces)
+            if len(allowed_face_ids):
+                filtered_mesh = trimesh.Trimesh(
+                    vertices=vertices,
+                    faces=faces[allowed_face_ids],
+                    process=False,
+                )
+                self.filtered_proximity[filter_id] = (
+                    trimesh.proximity.ProximityQuery(filtered_mesh),
+                    allowed_face_ids,
+                )
 
     def __call__(self, positions: np.ndarray) -> np.ndarray:
         """Return [particle, 3, vec4] contact point/normal/closest-point records."""
         p = np.asarray(positions, dtype=np.float64).reshape(-1, 3)
-        closest, distance, face_id = self.proximity.on_surface(p)
+        if self.particle_filter_ids is not None and len(self.particle_filter_ids) != len(p):
+            raise ValueError("particle_filter_ids must have one entry per position")
+        closest = np.empty_like(p)
+        distance = np.empty(len(p), dtype=np.float64)
+        face_id = np.empty(len(p), dtype=np.int64)
+        filter_ids = (
+            np.full(len(p), -1, dtype=np.int32)
+            if self.particle_filter_ids is None
+            else self.particle_filter_ids
+        )
+        for filter_id in np.unique(filter_ids):
+            particle_ids = np.flatnonzero(filter_ids == filter_id)
+            if filter_id < 0:
+                query = self.proximity
+                original_face_ids = None
+            else:
+                if int(filter_id) not in self.filtered_proximity:
+                    raise ValueError(
+                        f"body collision filter {filter_id} excludes every body face"
+                    )
+                query, original_face_ids = self.filtered_proximity[int(filter_id)]
+            group_closest, group_distance, group_face_ids = query.on_surface(p[particle_ids])
+            closest[particle_ids] = group_closest
+            distance[particle_ids] = group_distance
+            if original_face_ids is None:
+                face_id[particle_ids] = group_face_ids
+            else:
+                face_id[particle_ids] = original_face_ids[group_face_ids]
         # The body mesh is watertight and winding-consistent. Its closest-face
         # normal therefore gives the local signed side without running a costly
         # all-rays point-in-mesh query on every frame.
@@ -66,6 +124,34 @@ class BodyContactQuery:
             if self.enable_reference_drag
             else np.zeros(len(p), dtype=bool)
         )
+        if drag_active.any() and self.reference_drag_pairs:
+            if (
+                self.body_face_labels is None
+                or self.particle_reference_labels is None
+                or len(self.body_face_labels) != len(self.mesh.faces)
+                or len(self.particle_reference_labels) != len(p)
+            ):
+                raise ValueError(
+                    "reference-drag labels must cover body faces and cloth particles"
+                )
+            drag_active &= np.fromiter(
+                (
+                    (
+                        self.particle_reference_labels[particle_id],
+                        (
+                            "legs"
+                            if self.particle_reference_labels[particle_id] == "legs"
+                            and self.body_face_labels[int(face_id[particle_id])]
+                            in {"left_leg", "right_leg"}
+                            else self.body_face_labels[int(face_id[particle_id])]
+                        ),
+                    )
+                    in self.reference_drag_pairs
+                    for particle_id in range(len(p))
+                ),
+                dtype=bool,
+                count=len(p),
+            )
 
         data = np.zeros((len(p), 3, 4), dtype=np.float32)
         # Warp computes body_pos = x - n * (signed_distance - thickness),

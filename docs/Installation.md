@@ -16,7 +16,9 @@ Create system.json file in the root of this directory with your machine's file p
 
 ## Simulation backend
 
-Garment simulation uses the wgpu-py XPBD backend. Install `wgpu` through the project dependencies and ensure the machine has a WebGPU adapter (Vulkan on Linux, Metal on macOS, or D3D12 on Windows). The current port reports unsupported simulation features unless `allow_unsupported_wgpu` is explicitly enabled in the simulation config. USD frame caching and vertex-normal export are not implemented by this backend.
+Garment simulation uses the wgpu-py XPBD backend. Install `wgpu` through the project dependencies and ensure the machine has a WebGPU adapter (Vulkan on Linux, Metal on macOS, or D3D12 on Windows); Mesa lavapipe can provide a CPU Vulkan adapter. The backend supports per-frame point-triangle/edge-edge contacts, semantic body collision filtering, labeled attachment constraints, and panel/body reference drag when the corresponding mesh segmentation and measurement inputs are available. Particle-particle collisions, ground contacts, USD frame caching, and vertex-normal export are not implemented.
+
+`allow_unsupported_wgpu` allows a run to proceed when a requested feature cannot be applied; it does not implement that feature. Omitted features are recorded in the WGPU JSON report.
 
 Run the one-frame core verification with `python test_garment_sim.py --sim_config assets/Sim_props/wgpu_core_verify.yaml`. This config disables rendering and features not yet implemented by the WGPU port.
 
